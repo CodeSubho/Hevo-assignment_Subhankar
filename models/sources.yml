@@ -1,0 +1,10 @@
+version: 2
+
+sources:
+  - name: hevo
+    database: PC_HEVODATA_DB
+    schema: PUBLIC
+    tables:
+      - name: HEVO_SF_RAW_CUSTOMERS
+      - name: HEVO_SF_RAW_ORDERS
+      - name: HEVO_SF_RAW_PAYMENTS

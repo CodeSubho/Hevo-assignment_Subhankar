@@ -1,0 +1,25 @@
+version: 2
+
+models:
+  - name: customers
+    description: "One record per customer with order and payment summaries"
+    config:
+      materialized: table
+    columns:
+      - name: customer_id
+        description: "Primary key"
+        tests:
+          - unique
+          - not_null
+      - name: first_name
+        description: "Customer first name"
+        tests:
+          - not_null
+      - name: number_of_orders
+        description: "Total number of orders placed by the customer"
+        tests:
+          - not_null
+      - name: customer_lifetime_value
+        description: "Total amount spent by the customer"
+        tests:
+          - not_null
