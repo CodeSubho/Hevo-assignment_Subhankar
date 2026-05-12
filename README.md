@@ -1,7 +1,9 @@
 # Hevo Data Engineering Assignment
 ### Subhankar Kar Chowdhury
 
+
 ---
+
 
 ## The Objective
 
@@ -16,7 +18,9 @@ The specific deliverables were:
 3. A dbt project that transforms raw data into a clean, tested customers mart table
 4. A GitHub repository with no hardcoded credentials, a working README, and a Loom walkthrough
 
+
 ---
+
 
 ## Architecture
 
@@ -44,7 +48,9 @@ Each layer has a single, clear responsibility:
 
 This separation means any layer can be replaced or upgraded without breaking the others.
 
+
 ---
+
 
 ## Components — The Role of Each
 
@@ -90,7 +96,9 @@ table. Unlike writing SQL directly in Snowflake, dbt adds:
 - **Auto-generated documentation** — every column described and lineaged
 - **Modular SQL** — reusable building blocks with no duplicated logic
 
+
 ---
+
 
 ## Prerequisites
 
@@ -104,10 +112,10 @@ table. Unlike writing SQL directly in Snowflake, dbt adds:
 | Hevo Account | Trial via Snowflake Partner Connect | ELT pipeline tool |
 | Git | Any recent version | Version control and GitHub push |
 
-> **Important for Mac Apple Silicon (M1/M2/M3) users:** Python 3.11 must be installed
-> via Homebrew (`brew install python@3.11`). Python 3.12+ causes dbt compatibility errors.
+
 
 ---
+
 
 ## Step-by-Step Implementation Guide
 
@@ -148,11 +156,20 @@ Docker runs PostgreSQL in a self-contained container. The `-p 5432:5432` flag
 maps the container's database port to your local machine so tools like DBeaver
 can connect to it:
 
+
+```
+Set these in the terminal before running:
+
+export POSTGRES_USER="your_db_username"
+export POSTGRES_PASSWORD="your_db_password"
+export POSTGRES_DB="your_db_name"
+```
+
 ```bash
 docker run --name hevo-postgres \
-  -e POSTGRES_USER=hevo_user \
-  -e POSTGRES_PASSWORD=hevo_pass \
-  -e POSTGRES_DB=hevo_db \
+  -e POSTGRES_USER=$POSTGRES_USER \
+  -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD \
+  -e POSTGRES_DB=$POSTGRES_DB \
   -p 5432:5432 \
   -d postgres:15
 ```
@@ -169,8 +186,7 @@ You should see `hevo-postgres` listed with status `Up`.
 
 ### Step 3: Create Tables and Load CSV Data
 
-Connect to the database using DBeaver (Host: `localhost`, Port: `5432`,
-Database: `hevo_db`, User: `hevo_user`, Password: `hevo_pass`).
+Connect to the database using DBeaver (Host: localhost, Port: 5432, Database: your_db_name, User: your_db_username, Password: your_db_password)
 
 Open a SQL Editor and create the three tables:
 
@@ -219,7 +235,7 @@ can subscribe to for real-time streaming.
 Go inside the Docker container:
 
 ```bash
-docker exec -it hevo-postgres psql -U hevo_user -d hevo_db
+docker exec -it hevo-postgres psql -U $POSTGRES_USER -d $POSTGRES_DB
 ```
 
 Run these three settings:
@@ -240,14 +256,14 @@ docker restart hevo-postgres
 Re-enter and verify the settings applied:
 
 ```bash
-docker exec -it hevo-postgres psql -U hevo_user -d hevo_db
+docker exec -it hevo-postgres psql -U $POSTGRES_USER -d $POSTGRES_DB
 SHOW wal_level;                         -- Must show: logical
 ```
 
 Grant the replication role to the database user:
 
 ```sql
-ALTER ROLE hevo_user REPLICATION LOGIN;
+ALTER ROLE your_db_username REPLICATION LOGIN;
 ```
 
 Create a named publication — this tells PostgreSQL exactly which tables
@@ -287,7 +303,7 @@ Note the Forwarding address — it looks like:
 Forwarding: tcp://X.tcp.ngrok.io:XXXXX -> localhost:5432
 ```
 
-The host (`X.tcp.ngrok.io`) and port (`XXXXX`) are what you will provide
+The host (`X.tcp.ngrok.io`) and port (`XXXXX`) will be provided
 to Hevo as the database connection details. ngrok generates a new address
 every time it restarts, so if it stops, the Hevo pipeline source must be
 updated with the new address.
@@ -297,15 +313,9 @@ updated with the new address.
 ### Step 6: Sign Up for Snowflake
 
 Go to https://signup.snowflake.com and create a free 30-day trial account.
-Select AWS as the cloud provider and choose a region (ap-south-1 for India).
+Select AWS as the cloud provider and choose the region closest - 
+Mumbai was chosen
 
-Once inside Snowflake, note your account identifier from the URL:
-
-```
-https://app.snowflake.com/orgname/accountname/
-```
-
-Your dbt account identifier will be: `orgname-accountname`
 
 ---
 
@@ -330,8 +340,8 @@ Configure the source using the ngrok tunnel details:
 
 - **Host:** ngrok forwarding host (e.g. `6.tcp.ngrok.io`)
 - **Port:** ngrok forwarding port (e.g. `15432`)
-- **Database:** `hevo_db`
-- **User:** `hevo_user`
+- **Database:** your_db_name
+- **User:** your_db_username
 - **Ingestion Mode:** `Logical Replication` — required by the assignment
 - **Publication Name:** `hevo_publication`
 
@@ -514,7 +524,7 @@ The customers mart table contains one row per customer:
 | No hardcoded credentials | All secrets passed via environment variables only |
 | profiles.yml outside repo | Lives in `~/.dbt/` — never committed to Git |
 | .gitignore configured | Blocks credentials, dbt build artifacts, Mac system files |
-| Least privilege DB role | `hevo_user` has only SELECT and REPLICATION rights |
+| Least privilege DB role | The replication DB user has only SELECT and REPLICATION rights |
 | Named publication | Hevo can replicate only the three specified tables |
 | Credential verification | `git grep` confirms zero literal secrets in the repository |
 
