@@ -1,150 +1,376 @@
 # Hevo Data Engineering Assignment
-### Subhankar Kar Chowdhury | Head of Customer Success Candidate
+### Subhankar Kar Chowdhury
 
 ---
 
 ## The Objective
 
-This assignment required building a complete, production-grade 
-end-to-end ELT pipeline — from a locally hosted PostgreSQL database 
-all the way through to a transformed, tested, and documented data 
-model in Snowflake. The instructions were intentionally vague, 
-requiring independent research, ambiguity resolution, and 
-professional documentation alongside the technical build.
+This assignment required building a complete, production-grade end-to-end ELT pipeline,
+from a locally hosted PostgreSQL database all the way through to a transformed, tested,
+and documented data model in Snowflake. 
 
 The specific deliverables were:
 
 1. A Docker-based PostgreSQL database loaded with three raw datasets
-2. A Hevo pipeline using Logical Replication to replicate data 
-   into Snowflake in near real time
-3. A dbt project that transforms raw data into a clean, 
-   tested customers mart table
-4. A GitHub repository with no hardcoded credentials, 
-   a working README, and a Loom walkthrough
-
-What this document does beyond the checklist: it tells the full 
-story of how the pipeline was built, why each decision was made, 
-what friction was encountered, and what a real CS team could do 
-with this pipeline in production.
+2. A Hevo pipeline using Logical Replication to replicate data into Snowflake in near real time
+3. A dbt project that transforms raw data into a clean, tested customers mart table
+4. A GitHub repository with no hardcoded credentials, a working README, and a Loom walkthrough
 
 ---
 
 ## Architecture
 
-The complete data flow, from source to mart:
-+------------------+ Logical +--------+ COPY +-----------+ dbt +---------------+ | PostgreSQL 16 | Replication | Hevo | -------> | Snowflake | -------> | customers | | (Docker-based | -------------> | ELT | | Warehouse | models | (mart table) | | local machine) | WAL streaming | | | | | | +------------------+ +--------+ +-----------+ +---------------+ raw_customers HEVO_SF_RAW_* CUSTOMERS raw_orders HEVO_SF_RAW_CUSTOMERS - customer_id raw_payments HEVO_SF_RAW_ORDERS - first_name HEVO_SF_RAW_PAYMENTS - last_name - first_order - most_recent_order - number_of_orders - customer_lifetime_value
+```
++------------------+    Logical       +--------+    COPY    +-----------+    dbt     +---------------+
+|  PostgreSQL 15   |  Replication     |  Hevo  |  ------->  | Snowflake |  ------->  |   customers   |
+|  (Docker-based,  |  ------------->  |  ELT   |            | Warehouse |   models   |  (mart table) |
+|  local machine)  |  WAL streaming   |        |            |           |            |               |
++------------------+                  +--------+            +-----------+            +---------------+
+   raw_customers                                            HEVO_SF_RAW_CUSTOMERS    - customer_id
+   raw_orders                                               HEVO_SF_RAW_ORDERS       - first_name
+   raw_payments                                             HEVO_SF_RAW_PAYMENTS     - last_name
+                                                                                     - first_order
+                                                                                     - most_recent_order
+                                                                                     - number_of_orders
+                                                                                     - customer_lifetime_value
+```
 
-
-
-**Why this architecture?**
 Each layer has a single, clear responsibility:
-- PostgreSQL owns the raw source data
-- Hevo owns the movement of data (no transformation)
-- Snowflake owns the storage
-- dbt owns all transformation logic
 
-This separation means any layer can be replaced or upgraded 
-without breaking the others — a principle that matters deeply 
-when managing enterprise customer implementations.
+- **PostgreSQL** owns the raw source data
+- **Hevo** owns the movement of data (no transformation)
+- **Snowflake** owns the storage
+- **dbt** owns all transformation logic
+
+This separation means any layer can be replaced or upgraded without breaking the others.
 
 ---
 
-## Components — What Each One Does and Why It Was Chosen
+## Components — The Role of Each
 
 ### PostgreSQL (Source Database)
-PostgreSQL is one of the most widely used open-source relational 
-databases in enterprise environments. It was chosen here because:
-- It supports Logical Replication natively — essential for 
-  real-time CDC (Change Data Capture)
-- It is the most common source database type in Hevo customer 
-  implementations
-- Running it inside Docker means zero installation complexity 
-  and complete reproducibility
+PostgreSQL is one of the most widely used open-source relational databases in enterprise
+environments. It supports Logical Replication natively — essential for real-time CDC
+(Change Data Capture). Running it inside Docker means zero installation complexity
+and complete reproducibility across machines.
 
 ### Docker
-Docker runs PostgreSQL inside a self-contained "box" on your 
-local machine. This means:
-- No complex database installation required
-- The exact same environment runs on any machine
-- Easy to start, stop, and reset for testing
+Docker runs PostgreSQL inside a self-contained container on the local machine —
+no complex database installation required, the same environment runs on any machine,
+and it is easy to start, stop, and reset for testing.
 
 ### ngrok
-Hevo is a cloud service. A local Docker database has no public 
-internet address. ngrok creates a secure tunnel — a temporary 
-public address pointing to the local database — allowing Hevo 
-Cloud to connect to it as if it were hosted on a public server.
-
-This is a real networking challenge that Hevo CS teams encounter 
-regularly with customers who have on-premise databases.
+Hevo is a cloud service. A local Docker database has no public internet address.
+ngrok creates a secure TCP tunnel — a temporary public address pointing to the local
+database — allowing Hevo Cloud to connect to it as if it were hosted on a public server.
+This is a real networking challenge that arises whenever Hevo customers have on-premise
+or locally hosted databases.
 
 ### Hevo Data (ELT Pipeline)
-Hevo moves data from PostgreSQL to Snowflake automatically, 
-in near real time, using Logical Replication. Key reasons for 
-Logical Replication over batch ingestion:
-- Captures every INSERT, UPDATE, and DELETE as it happens
+Hevo moves data from PostgreSQL to Snowflake automatically, in near real time,
+using Logical Replication. This means:
+
+- Every INSERT, UPDATE, and DELETE is captured as it happens
 - Sub-minute latency from source change to Snowflake landing
 - No scheduled batch jobs to manage or monitor
-- Ideal for customer-facing analytics that need fresh data
+- Always-fresh data for downstream analytics
 
 ### Snowflake (Cloud Data Warehouse)
-Snowflake is the destination warehouse where all raw data lands 
-and where dbt runs transformations. It was connected via 
-Snowflake Partner Connect — which auto-provisions the database, 
-warehouse, role, and user for Hevo, removing manual configuration.
+Snowflake is the destination warehouse where all raw data lands and where dbt runs
+transformations. It was provisioned via Snowflake Partner Connect — which
+auto-creates the database, warehouse, role, and user for Hevo, removing all
+manual configuration steps.
 
-### dbt (Data Transformation)
-dbt transforms the three raw, scattered tables into one clean, 
-business-ready customers table. Unlike writing SQL directly in 
-Snowflake, dbt adds:
-- Version control — every transformation is a tracked file in Git
-- Automated testing — data quality checked on every run
-- Auto-generated documentation — every column described and lineaged
-- Modular, reusable SQL — no duplicated logic across teams
+### dbt (Data Transformation Layer)
+dbt transforms three raw, scattered tables into one clean, business-ready customers
+table. Unlike writing SQL directly in Snowflake, dbt adds:
+
+- **Version control** — every transformation is a tracked file in Git
+- **Automated testing** — data quality is checked on every single run
+- **Auto-generated documentation** — every column described and lineaged
+- **Modular SQL** — reusable building blocks with no duplicated logic
 
 ---
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Docker Desktop | Any recent | Runs PostgreSQL locally |
-| Python | 3.11 | Required for dbt |
-| dbt-snowflake | 1.7+ | dbt adapter for Snowflake |
-| ngrok | Any recent | Exposes local DB to Hevo Cloud |
-| Snowflake Account | Trial | Cloud data warehouse |
-| Hevo Account | Trial via Partner Connect | ELT pipeline |
-| Git | Any | Version control |
+| Tool | Version Used | Purpose |
+|------|-------------|---------|
+| Docker Desktop | postgres:15 image | Runs PostgreSQL locally in a container |
+| Python | 3.11.15 | Required runtime for dbt |
+| dbt-snowflake | 1.11.9 (core) / 1.11.4 (adapter) | dbt with Snowflake connector |
+| ngrok | Latest free tier | Exposes local database to Hevo Cloud |
+| Snowflake Account | Trial (30 days) | Cloud data warehouse destination |
+| Hevo Account | Trial via Snowflake Partner Connect | ELT pipeline tool |
+| Git | Any recent version | Version control and GitHub push |
+
+> **Important for Mac Apple Silicon (M1/M2/M3) users:** Python 3.11 must be installed
+> via Homebrew (`brew install python@3.11`). Python 3.12+ causes dbt compatibility errors.
 
 ---
 
-## Setup Instructions
+## Step-by-Step Implementation Guide
 
-### Step 1: Clone the Repository
+### Step 1: Install Required Tools
+
+Install Docker Desktop from https://docker.com and Git from https://git-scm.com.
+Then install Python 3.11 and dbt via Homebrew:
+
 ```bash
-git clone https://github.com/CodeSubho/Hevo-assignment_Subhankar.git
-cd Hevo-assignment_Subhankar
+brew install python@3.11
+python3.11 --version                    # Should show Python 3.11.x
 ```
 
-### Step 2: Set Environment Variables
-All credentials are passed via environment variables. 
-Never hardcode these in any file.
+Create a Python virtual environment specifically for dbt. This isolates dbt's
+dependencies from the rest of your system and prevents version conflicts:
 
 ```bash
-# Run these in every new Terminal session before using dbt
-export SNOWFLAKE_ACCOUNT="your_snowflake_account"
+cd ~/Desktop
+python3.11 -m venv dbt-env
+source dbt-env/bin/activate             # Activate before every dbt session
+pip install --upgrade pip
+pip install dbt-snowflake
+dbt --version                           # Should show dbt Core 1.x.x
+```
+
+Install ngrok from https://ngrok.com, create a free account, and connect it:
+
+```bash
+brew install ngrok
+ngrok config add-authtoken YOUR_TOKEN_HERE
+```
+
+---
+
+### Step 2: Start PostgreSQL in Docker
+
+Docker runs PostgreSQL in a self-contained container. The `-p 5432:5432` flag
+maps the container's database port to your local machine so tools like DBeaver
+can connect to it:
+
+```bash
+docker run --name hevo-postgres \
+  -e POSTGRES_USER=hevo_user \
+  -e POSTGRES_PASSWORD=hevo_pass \
+  -e POSTGRES_DB=hevo_db \
+  -p 5432:5432 \
+  -d postgres:15
+```
+
+Verify it is running:
+
+```bash
+docker ps
+```
+
+You should see `hevo-postgres` listed with status `Up`.
+
+---
+
+### Step 3: Create Tables and Load CSV Data
+
+Connect to the database using DBeaver (Host: `localhost`, Port: `5432`,
+Database: `hevo_db`, User: `hevo_user`, Password: `hevo_pass`).
+
+Open a SQL Editor and create the three tables:
+
+```sql
+CREATE TABLE raw_customers (
+    id INTEGER PRIMARY KEY,
+    first_name VARCHAR(50),
+    last_name  VARCHAR(50)
+);
+
+CREATE TABLE raw_orders (
+    id         INTEGER PRIMARY KEY,
+    user_id    INTEGER,
+    order_date DATE,
+    status     VARCHAR(50)
+);
+
+CREATE TABLE raw_payments (
+    id             INTEGER PRIMARY KEY,
+    order_id       INTEGER,
+    payment_method VARCHAR(50),
+    amount         INTEGER
+);
+```
+
+Import each CSV file using DBeaver's Import Data feature:
+right-click each table → Import Data → CSV → select the file → Finish.
+
+Verify the row counts:
+
+```sql
+SELECT COUNT(*) FROM raw_customers;   -- Expected: 100
+SELECT COUNT(*) FROM raw_orders;      -- Expected: 99
+SELECT COUNT(*) FROM raw_payments;    -- Expected: 113
+```
+
+---
+
+### Step 4: Enable Logical Replication in PostgreSQL
+
+This is the most critical configuration step. Logical Replication must be
+enabled on the PostgreSQL side — Hevo cannot do this itself. It tells the
+database to keep a detailed change log (WAL — Write Ahead Log) that Hevo
+can subscribe to for real-time streaming.
+
+Go inside the Docker container:
+
+```bash
+docker exec -it hevo-postgres psql -U hevo_user -d hevo_db
+```
+
+Run these three settings:
+
+```sql
+ALTER SYSTEM SET wal_level = logical;
+ALTER SYSTEM SET max_replication_slots = 10;
+ALTER SYSTEM SET max_wal_senders = 10;
+```
+
+Exit and restart Docker for the settings to take effect:
+
+```bash
+\q
+docker restart hevo-postgres
+```
+
+Re-enter and verify the settings applied:
+
+```bash
+docker exec -it hevo-postgres psql -U hevo_user -d hevo_db
+SHOW wal_level;                         -- Must show: logical
+```
+
+Grant the replication role to the database user:
+
+```sql
+ALTER ROLE hevo_user REPLICATION LOGIN;
+```
+
+Create a named publication — this tells PostgreSQL exactly which tables
+Hevo is allowed to replicate. Only these three tables will be streamed:
+
+```sql
+CREATE PUBLICATION hevo_publication
+FOR TABLE raw_customers, raw_orders, raw_payments;
+```
+
+Verify the publication was created:
+
+```sql
+\dRp+
+```
+
+You should see `hevo_publication` listing all three tables. Type `\q` to exit.
+
+---
+
+### Step 5: Create the ngrok Tunnel
+
+Hevo is a cloud service and cannot reach a database running on a local laptop.
+ngrok solves this by creating a secure public-facing TCP tunnel that points
+directly to the local PostgreSQL port.
+
+Open a new Terminal window and run:
+
+```bash
+ngrok tcp 5432
+```
+
+Keep this Terminal window open for the entire duration of the Hevo pipeline.
+Note the Forwarding address — it looks like:
+
+```
+Forwarding: tcp://X.tcp.ngrok.io:XXXXX -> localhost:5432
+```
+
+The host (`X.tcp.ngrok.io`) and port (`XXXXX`) are what you will provide
+to Hevo as the database connection details. ngrok generates a new address
+every time it restarts, so if it stops, the Hevo pipeline source must be
+updated with the new address.
+
+---
+
+### Step 6: Sign Up for Snowflake
+
+Go to https://signup.snowflake.com and create a free 30-day trial account.
+Select AWS as the cloud provider and choose a region (ap-south-1 for India).
+
+Once inside Snowflake, note your account identifier from the URL:
+
+```
+https://app.snowflake.com/orgname/accountname/
+```
+
+Your dbt account identifier will be: `orgname-accountname`
+
+---
+
+### Step 7: Sign Up for Hevo via Snowflake Partner Connect
+
+The assignment specifically requires signing up through Snowflake, not directly.
+This automatically provisions the Snowflake destination with correct permissions.
+
+1. Inside Snowflake, go to **Admin → Partner Connect**
+2. Find **Hevo Data** and click **Connect**
+3. Snowflake auto-creates `PC_HEVODATA_DB`, `COMPUTE_WH`, role, and user
+4. You will be redirected to Hevo to complete signup
+5. Note your **Team ID** from Hevo Settings (also visible in the URL: `/team/XXXXXX/`)
+
+---
+
+### Step 8: Build the Hevo Pipeline
+
+In Hevo, go to **Pipelines → Create Pipeline → PostgreSQL**.
+
+Configure the source using the ngrok tunnel details:
+
+- **Host:** ngrok forwarding host (e.g. `6.tcp.ngrok.io`)
+- **Port:** ngrok forwarding port (e.g. `15432`)
+- **Database:** `hevo_db`
+- **User:** `hevo_user`
+- **Ingestion Mode:** `Logical Replication` — required by the assignment
+- **Publication Name:** `hevo_publication`
+
+Set the destination to the Snowflake account provisioned by Partner Connect.
+Click **Test Connection** — it should pass. Start the pipeline.
+
+Note your **Pipeline ID** from the URL: `/pipelines/XXXXXX/`
+
+Wait for the Historical Load to complete. Verify in Snowflake:
+
+```sql
+SELECT COUNT(*) FROM PC_HEVODATA_DB.PUBLIC.HEVO_SF_RAW_CUSTOMERS;  -- 100
+SELECT COUNT(*) FROM PC_HEVODATA_DB.PUBLIC.HEVO_SF_RAW_ORDERS;     -- 99
+SELECT COUNT(*) FROM PC_HEVODATA_DB.PUBLIC.HEVO_SF_RAW_PAYMENTS;   -- 113
+```
+
+---
+
+### Step 9: Configure dbt
+
+Set your Snowflake credentials as environment variables. These must be set
+in every new Terminal session before running dbt — they are never stored
+in any project file:
+
+```bash
+export SNOWFLAKE_ACCOUNT="your_orgname-accountname"
 export SNOWFLAKE_USER="your_snowflake_username"
 export SNOWFLAKE_PASSWORD="your_snowflake_password"
 ```
 
-### Step 3: Set Up the dbt Profile
-The profiles.yml lives outside the project to keep 
-credentials away from version control:
+Create the dbt profile file outside the project folder so it is never
+accidentally committed to GitHub:
 
 ```bash
 mkdir -p ~/.dbt
 ```
 
-Create ~/.dbt/profiles.yml with this content:
+Create `~/.dbt/profiles.yml` with this content:
+
 ```yaml
 hevo_subhankar_project:
   target: dev
@@ -161,323 +387,137 @@ hevo_subhankar_project:
       threads: 1
 ```
 
-### Step 4: Set Up Python Virtual Environment
-```bash
-cd ~/Desktop
-python3.11 -m venv dbt-env
-source dbt-env/bin/activate
-pip install --upgrade pip
-pip install dbt-snowflake
-```
+Activate the virtual environment and verify the connection:
 
-### Step 5: Verify dbt Connection
 ```bash
-cd Hevo-assignment_Subhankar
+source ~/Desktop/dbt-env/bin/activate
+cd ~/Desktop/hevo_subhankar_project
 dbt debug
 ```
-All checks should show OK.
 
-### Step 6: Build the Models
+All checks should show `OK`.
+
+---
+
+### Step 10: Run dbt and Test
+
+Build the customers model:
+
 ```bash
 dbt run
 ```
 
-### Step 7: Run Data Quality Tests
+dbt executes the SQL in `customers.sql`, joins the three source tables,
+calculates all required metrics, and materialises the result as a permanent
+table in Snowflake at `PC_HEVODATA_DB.PUBLIC.CUSTOMERS`.
+
+Run data quality tests:
+
 ```bash
 dbt test
+```
+
+dbt runs all tests defined in `schema.yml`. If any test fails, dbt reports
+exactly which rows failed and why.
+
+**Expected result:** `PASS=6, WARN=0, ERROR=0`
+
+Verify the final output in Snowflake:
+
+```sql
+SELECT * FROM PC_HEVODATA_DB.PUBLIC.CUSTOMERS
+ORDER BY customer_lifetime_value DESC
+LIMIT 10;
 ```
 
 ---
 
-## The Full Story — How This Was Built, Step by Step
-
-### Chapter 1: Setting Up the Source Database
-
-The starting point was a local PostgreSQL database running 
-inside Docker. Docker was chosen over a native installation 
-because it is reproducible, isolated, and mirrors how many 
-enterprise customers deploy databases in containerised 
-environments.
-
-**Why this step matters for CS:**
-When onboarding customers to Hevo, the source database 
-configuration is almost always where implementation complexity 
-lives. Understanding Docker-based deployments, replication 
-settings, and publication management is essential for a CS 
-leader supporting technical customers.
-
-The database was started with:
-```bash
-docker run --name hevo-postgres \
-  -e POSTGRES_USER=hevo_user \
-  -e POSTGRES_PASSWORD=hevo_pass \
-  -e POSTGRES_DB=hevo_db \
-  -p 5432:5432 \
-  -d postgres:15
-```
-
-Three tables were created and loaded with the provided 
-CSV datasets:
-- raw_customers — 100 rows
-- raw_orders — 99 rows  
-- raw_payments — 113 rows
-
-### Chapter 2: Enabling Logical Replication
-
-This was the most technically critical configuration step — 
-and the one most likely to cause failures in real customer 
-implementations.
-
-Logical Replication was configured entirely on the PostgreSQL 
-side by setting three parameters:
-
-```sql
-ALTER SYSTEM SET wal_level = logical;
-ALTER SYSTEM SET max_replication_slots = 10;
-ALTER SYSTEM SET max_wal_senders = 10;
-```
-
-**What these mean:**
-- wal_level = logical tells PostgreSQL to keep a detailed 
-  log of every data change — not just enough for crash 
-  recovery, but enough for external services like Hevo 
-  to subscribe to
-- max_replication_slots reserves capacity for services 
-  that want to subscribe to this log
-- max_wal_senders allows concurrent connections to 
-  stream the log
-
-A named publication was then created — specifying exactly 
-which tables Hevo should replicate:
-
-```sql
-CREATE PUBLICATION hevo_publication 
-FOR TABLE raw_customers, raw_orders, raw_payments;
-```
-
-**Why this step matters for CS:**
-This is the step that customers most frequently get wrong. 
-A CS leader needs to understand that Hevo cannot configure 
-the source database itself — the customer's database team 
-must make these changes. Knowing exactly what to ask for, 
-and why, is the difference between a smooth onboarding 
-and a delayed one.
-
-### Chapter 3: Solving the Networking Challenge
-
-This was the step the assignment left deliberately vague — 
-and the one that required the most independent research.
-
-Hevo is a cloud service. A local Docker database has no 
-public IP address. The solution was ngrok — a tool that 
-creates a secure TCP tunnel from the public internet to 
-the local PostgreSQL port:
+### Step 11: Push to GitHub
 
 ```bash
-ngrok tcp 5432
+git add .
+git commit -m "Complete dbt project with customers model and tests"
+git push origin main
 ```
 
-This produced a public forwarding address that was used 
-as the Hevo source host — making the local database 
-reachable from Hevo Cloud without exposing it permanently 
-to the internet.
-
-**Why this step matters for CS:**
-Many Hevo customers have on-premise or VPC-hosted databases 
-that are not publicly accessible. The networking solution 
-varies — ngrok for testing, static IPs with firewall rules 
-for production, VPN tunnels for enterprise. A CS leader 
-who understands the networking layer can diagnose connection 
-failures independently rather than escalating every time.
-
-### Chapter 4: Building the Hevo Pipeline
-
-The Hevo trial was signed up via Snowflake Partner Connect — 
-which automatically provisioned the Snowflake destination 
-database, warehouse, role, and user. This is the recommended 
-path because it eliminates manual Snowflake configuration 
-and ensures correct permissions from the start.
-
-The pipeline was configured with:
-- Source: PostgreSQL via ngrok tunnel
-- Ingestion mode: Logical Replication
-- Publication: hevo_publication
-- Destination: Snowflake (Partner Connect provisioned)
-
-After the historical load completed, all three tables 
-appeared in Snowflake:
-- HEVO_SF_RAW_CUSTOMERS — 100 rows
-- HEVO_SF_RAW_ORDERS — 99 rows
-- HEVO_SF_RAW_PAYMENTS — 113 rows
-
-**Why this step matters for CS:**
-The pipeline configuration screen is what most customers 
-see during their first Hevo onboarding. A CS leader who 
-has personally built a pipeline — including troubleshooting 
-the logical replication errors, networking issues, and 
-Partner Connect setup — can guide customers through this 
-experience with genuine authority.
-
-### Chapter 5: Transforming Data with dbt
-
-With raw data in Snowflake, dbt was used to transform 
-three scattered tables into one clean, business-ready 
-customers table. The project was structured in three files:
-
-#### models/sources.yml
-Defines where the raw source data lives in Snowflake. 
-This tells dbt which database and schema to look in, 
-and which tables to treat as source data.
-
-#### models/customers.sql
-The core transformation logic. This file:
-- Joins raw_customers, raw_orders, and raw_payments
-- Calculates first_order (earliest order date per customer)
-- Calculates most_recent_order (latest order date)
-- Counts number_of_orders per customer
-- Sums all payments to calculate customer_lifetime_value
-- Uses COALESCE to replace NULL with 0 for customers 
-  who have not yet placed any orders
-
-#### models/schema.yml
-Defines data quality tests that run automatically 
-after every build:
-- unique test on customer_id — no duplicate customers
-- not_null tests on key columns — no missing data
-- This is the quality gate that ensures the 
-  customers table is always trustworthy
-
-### Chapter 6: Running and Testing
+Verify no credentials are present anywhere in the repository:
 
 ```bash
-# Build all models
-dbt run
+git grep -r "password" --include="*.yml" --include="*.sql"
 ```
 
-dbt run executes the SQL in customers.sql against 
-Snowflake and materialises the result as a permanent 
-table — not a view, not a temporary result, but a 
-real table that any BI tool or analyst can query directly.
-
-```bash
-# Validate data quality  
-dbt test
-```
-
-dbt test runs all tests defined in schema.yml. 
-If any test fails — for example, if a duplicate 
-customer_id appeared — dbt reports exactly which 
-rows failed and why. This makes data quality issues 
-immediately visible rather than silently corrupting 
-downstream reports.
-
-**Result:** PASS=6, WARN=0, ERROR=0
+Only `env_var` references should appear — never literal values.
 
 ---
 
 ## Project Structure
 
-hevo_subhankar_project/ ├── models/ │ ├── sources.yml ← defines source tables from Hevo/Snowflake │ ├── customers.sql ← transformation logic (the core deliverable) │ └── schema.yml ← data quality tests and column descriptions ├── dbt_project.yml ← project configuration (name, version, paths) ├── .gitignore ← excludes credentials, dbt artifacts, Mac files └── README.md ← this document
-
+```
+Hevo-assignment_Subhankar/
+│
+├── models/
+│   │
+│   ├── sources.yml
+│   │     Declares the source tables Hevo loaded into Snowflake.
+│   │     Tells dbt which database, schema, and table names to
+│   │     read from. Without this, dbt cannot find the raw data.
+│   │
+│   ├── customers.sql
+│   │     The core transformation. Joins raw_customers, raw_orders,
+│   │     and raw_payments. Calculates first_order, most_recent_order,
+│   │     number_of_orders, and customer_lifetime_value. Uses COALESCE
+│   │     to replace NULL with 0 for customers with no orders yet.
+│   │
+│   └── schema.yml
+│         Defines automated data quality tests that run after every
+│         dbt build: unique and not_null on customer_id, not_null on
+│         first_name, number_of_orders, and customer_lifetime_value.
+│
+├── dbt_project.yml
+│     Project configuration — name, version, model paths,
+│     and materialisation settings (table vs view).
+│
+├── .gitignore
+│     Excludes credentials, dbt build artifacts, and Mac
+│     system files (.DS_Store) from version control.
+│
+└── README.md
+      This document.
+```
 
 ---
 
 ## Final Output — The Customers Table
 
-The customers mart table produced by dbt contains 
-one row per customer with the following structure:
+The customers mart table contains one row per customer:
 
-| Column | Source | Description |
-|--------|--------|-------------|
+| Column | Source Table | Description |
+|--------|-------------|-------------|
 | customer_id | raw_customers | Unique identifier for each customer |
 | first_name | raw_customers | Customer first name |
 | last_name | raw_customers | Customer last name |
 | first_order | raw_orders | Date of the customer's very first order |
 | most_recent_order | raw_orders | Date of the customer's most recent order |
 | number_of_orders | raw_orders | Total count of all orders placed |
-| customer_lifetime_value | raw_payments | Sum of all payments in dollars |
+| customer_lifetime_value | raw_payments | Sum of all payments made, in dollars |
 
 **Total rows:** 100 (one per customer)
-**Location:** PC_HEVODATA_DB.PUBLIC.CUSTOMERS
+**Location in Snowflake:** `PC_HEVODATA_DB.PUBLIC.CUSTOMERS`
 
----
-
-## What a CS Team Could Do With This Pipeline in Production
-
-This pipeline is not just a technical exercise — it is 
-the foundation of a real customer success data system. 
-Here is what becomes possible once this is in production:
-
-### 1. Customer Health Scoring
-Using customer_lifetime_value, number_of_orders, and 
-most_recent_order, a CS team can build an automated 
-health score for every customer — flagging accounts 
-that haven't ordered recently (churn risk) or whose 
-spending has dropped.
-
-### 2. Proactive Churn Prevention
-Customers whose most_recent_order was more than 90 days 
-ago can be automatically surfaced for CS outreach — 
-before they churn, not after.
-
-### 3. Expansion Revenue Identification
-Customers with high number_of_orders but low 
-customer_lifetime_value may be purchasing lower-value 
-products — a signal for upsell conversations.
-
-### 4. Real-Time Dashboards
-Because Hevo uses Logical Replication, the Snowflake 
-data is never more than minutes old. A Tableau, Looker, 
-or Metabase dashboard built on this data reflects 
-near-real-time business activity — not yesterday's batch.
-
-### 5. dbt as a Governance Layer
-Every transformation is versioned, tested, and documented. 
-When a new analyst joins, they can run dbt docs serve and 
-immediately understand every table, every column, and 
-every data lineage relationship — reducing onboarding 
-time and eliminating tribal knowledge.
 
 ---
 
 ## Security
 
-Security was treated as a first-class concern throughout:
-
 | Practice | Implementation |
 |----------|---------------|
-| No hardcoded credentials | All secrets passed via environment variables |
-| profiles.yml outside repo | Lives in ~/.dbt/ — never committed to Git |
-| .env gitignored | Excluded from version control entirely |
-| .gitignore configured | Blocks credentials, dbt artifacts, Mac system files |
-| Least privilege DB role | hevo_user has only SELECT and REPLICATION rights |
-| Named publication | Hevo can only see the three specified tables |
-
-To verify no secrets are present in this repository:
-```bash
-git grep -r "password" --include="*.yml" --include="*.sql"
-```
-Only env_var references will appear — never literal values.
+| No hardcoded credentials | All secrets passed via environment variables only |
+| profiles.yml outside repo | Lives in `~/.dbt/` — never committed to Git |
+| .gitignore configured | Blocks credentials, dbt build artifacts, Mac system files |
+| Least privilege DB role | `hevo_user` has only SELECT and REPLICATION rights |
+| Named publication | Hevo can replicate only the three specified tables |
+| Credential verification | `git grep` confirms zero literal secrets in the repository |
 
 ---
 
-## Loom Video Walkthrough
 
-A full video walkthrough of this implementation is 
-available here: [Add your Loom link here]
-
-The video covers:
-- PostgreSQL setup and data loading
-- ngrok tunnel configuration
-- Hevo pipeline creation and logical replication
-- Snowflake data verification
-- dbt model build and test results
-- GitHub repository structure
-
----
-
-## Submission Details
-
-- **GitHub:** https://github.com/CodeSubho/Hevo-assignment_Subhankar
-- **Hevo Team ID:** [Add your Team ID]
-- **Hevo Pipeline ID:** [Add your Pipeline ID]
